@@ -1,124 +1,97 @@
 # wiki-speedrun
 
-Build a queryable "shortest hop path between two Wikipedia articles" graph
-from the raw enwiki SQL dumps, in C++, no MySQL required.
+Find the shortest chain of Wikipedia hyperlinks between any two articles — built from the raw enwiki dumps, no MySQL required, and fast enough to answer in milliseconds once it's running.
 
-## Pipeline
+It's basically the engine behind that old "click through Wikipedia links to get from A to B" game, except it just tells you the answer.
 
-```
-enwiki-latest-page.sql.gz -----------------\
-enwiki-latest-redirect.sql.gz (optional) ---+--> pages.bin / titles.blob
-enwiki-latest-linktarget.sql.gz ------------+--> lt_to_dense.bin
-enwiki-latest-pagelinks.sql.gz -------------+--> edges.bin
-                                             \--> fwd/bwd CSR --> search
-```
+## How it works
 
-1. **build_pages** — parses `page.sql.gz`, keeps namespace-0 (article)
-   pages, assigns each a dense id (0..N-1), writes `pages.bin` +
-   `titles.blob` + sorted lookup indexes.
-2. **build_redirects** *(optional but recommended)* — parses
-   `redirect.sql.gz`, fills in each redirect page's `redirect_to` dense id
-   so redirect chains collapse to their real target. If you skip this
-   stage, links through redirect pages are simply dropped instead of
-   collapsed — the graph still works, just with fewer edges.
-3. **build_linktargets** — parses `linktarget.sql.gz`, resolves every
-   `lt_id` to a dense article id (needed because post-2021 `pagelinks`
-   dumps reference link targets indirectly through this table).
-4. **build_pagelinks** — parses `pagelinks.sql.gz`, emits `edges.bin`: raw
-   `(from_dense, to_dense)` pairs, with redirect collapsing and
-   namespace/self-loop filtering already applied.
-5. **build_csr** — turns `edges.bin` into forward and backward
-   compressed-sparse-row adjacency arrays (`fwd_*`, `bwd_*`).
-6. **search** — loads the graph and answers queries with classic
-   bidirectional BFS (optimal shortest-hop path, since both sides expand
-   depth-by-depth in lockstep).
+Wikipedia publishes its entire link graph as SQL dumps. This project parses those directly (no database import step), builds a compact graph out of them, and then answers "shortest path" queries with bidirectional BFS — searching from both the start and the destination at once, which is what makes queries fast even though Wikipedia's link graph is huge.
 
-## Build
+There's a small pipeline of tools that each do one step, and then either a command-line search tool or a web server that sits on top of the finished graph.
+
+## Building the graph
+
+You'll need three files from a [Wikipedia database dump](https://dumps.wikimedia.org/enwiki/latest/):
+
+- `enwiki-latest-page.sql.gz`
+- `enwiki-latest-linktarget.sql.gz`
+- `enwiki-latest-pagelinks.sql.gz`
+
+Build everything:
 
 ```sh
-sudo apt install zlib1g-dev   # if not already present
+sudo apt install zlib1g-dev   # if not already installed
 make
 ```
 
-Produces `bin/build_pages`, `bin/build_redirects`, `bin/build_linktargets`,
-`bin/build_pagelinks`, `bin/build_csr`, `bin/search`.
-
-## Run
+Then run the pipeline in order:
 
 ```sh
 mkdir -p graph
 ./bin/build_pages        enwiki-latest-page.sql.gz        graph/
-./bin/build_redirects     enwiki-latest-redirect.sql.gz     graph/   # optional
 ./bin/build_linktargets   enwiki-latest-linktarget.sql.gz   graph/
 ./bin/build_pagelinks     enwiki-latest-pagelinks.sql.gz    graph/
 ./bin/build_csr           graph/
-
-./bin/search graph/                       # interactive
-./bin/search graph/ "Cat" "Philosophy"    # one-shot
 ```
 
-`enwiki-latest-redirect.sql.gz` isn't in your original download list — grab
-it from the same dump directory (`https://dumps.wikimedia.org/enwiki/latest/`)
-if you want redirects collapsed properly.
+Each step reads a dump and writes out a bit more of the finished graph into `graph/`. `build_csr` is the last one — after that, everything's ready to query.
 
-## Verifying the dump's column order
+This takes a while (mostly the `pagelinks` step, since it's the biggest file), and needs a few GB of RAM at peak. Once it's done, though, `graph/` is all you need going forward — you don't have to touch the dumps again.
 
-MediaWiki's schema has changed over the years. Before running, sanity check
-the columns actually match what the code assumes:
+## Trying it from the command line
 
 ```sh
-zcat enwiki-latest-page.sql.gz | grep -m1 'CREATE TABLE'
+./bin/search graph/ "Cat" "Napoleon"
 ```
 
-The code assumes:
-- `page`: `page_id, page_namespace, page_title, page_is_redirect, ...`
-- `redirect`: `rd_from, rd_namespace, rd_title, rd_interwiki, rd_fragment`
-- `linktarget`: `lt_id, lt_namespace, lt_title`
-- `pagelinks` (post-2021 schema): `pl_from, pl_from_namespace, pl_target_id`
+or run it with no arguments for an interactive prompt. Good for a quick sanity check before setting up the website.
 
-If your dump predates the 2021 pagelinks migration (columns
-`pl_from, pl_namespace, pl_title, pl_from_namespace` with direct titles
-instead of `pl_target_id`), `build_linktargets`/`build_pagelinks` need
-small edits — ping me and I'll adjust them.
+## Running it as a website
 
-## Design notes / why it's fast
+This is where it gets fun. `bin/server` loads the graph once when it starts up and then just keeps it sitting in memory — every search after that is answered straight out of RAM, no disk reads, no reloading. That's the whole trick to keeping it fast.
 
-- **No MySQL import.** `include/sql_parser.hpp` is a small streaming
-  tokenizer that reads gzip directly and pulls out `INSERT ... VALUES`
-  tuples without building a full SQL AST — much faster than round-tripping
-  through a database.
-- **Dense integer ids everywhere.** Every article gets a compact `0..N-1`
-  id (~6.9M for enwiki ns0), so the graph fits in flat `uint32_t` arrays
-  instead of hash maps of strings.
-- **CSR (compressed sparse row) adjacency**, built in both directions, so
-  neither forward nor backward BFS ever has to scan an edge list — direct
-  index into a `targets` array via `offsets[node]..offsets[node+1]`.
-- **Bidirectional BFS.** Expanding from both start and goal in lockstep
-  turns `O(branching^depth)` into roughly `O(branching^(depth/2))`, which
-  is the difference between milliseconds and not finishing at Wikipedia's
-  branching factor.
-- **Redirects collapsed at build time**, not query time, so search doesn't
-  need special-casing.
+```sh
+make server
+./bin/server graph/ 8080 static/
+```
 
-## Rough scale (full enwiki)
+Open `http://localhost:8080` and you've got a working site. `static/index.html` is a self-contained frontend — no build step, no framework, just talks to a small JSON API:
 
-| stage | approx size |
-|---|---|
-| ns0 pages | ~6.9M |
-| ns0→ns0 pagelinks edges | ~150–300M |
-| `pages.bin` + `titles.blob` | a few hundred MB |
-| CSR `targets` arrays (both directions) | ~1.2–2.4 GB combined |
-| peak build RAM | a few GB |
+- `GET /api/search?start=Cat&goal=Dog` — returns the path, hop count, and timing
+- `GET /api/suggest?q=Ca` — title autocomplete
+- `GET /api/health` — quick "is it alive" check
 
-A full build (all 5 stages) on a decent machine should take somewhere in
-the tens-of-minutes range, dominated by decompression + parsing of
-`pagelinks.sql.gz` (by far the largest file). `search` itself, once the
-graph is loaded, answers most queries in low milliseconds.
+### Putting it online
 
-## Tested
+The setup I've been running: the graph and server live on a small always-on VM (an Oracle Cloud free-tier instance works well — it's genuinely free and has enough RAM for the full enwiki graph), kept running as a `systemd` service so it survives reboots and restarts itself if it ever crashes. The frontend is deployed separately to Vercel as a static site, and it just points at the VM's URL.
 
-`test/` (not included in the tarball, but reproducible) contains a
-hand-built synthetic dump exercising: multi-tuple/multi-statement INSERTs,
-backslash-escaped strings, NULL fields, non-ns0 filtering, redirect
-collapsing, and dropped self-loops/redirect-source edges — the full
-pipeline runs clean against it and `search` returns correct shortest paths.
+To expose the VM's server over HTTPS (needed since Vercel serves the frontend over HTTPS, and browsers won't let that page call a plain `http://` backend), I used [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/):
+
+```sh
+cloudflared tunnel --url http://localhost:8080
+```
+
+It prints a public HTTPS URL that forwards straight to your local server — no port forwarding, no certificates to manage. Set that URL as the `API` constant near the top of `static/index.html`, then deploy:
+
+```sh
+cd static
+vercel deploy --prod
+```
+
+And that's it — a real, working website, backed by a multi-gigabyte graph, running for free.
+
+## A rough sense of scale
+
+For context, the full English Wikipedia graph works out to something like:
+
+- ~6.9 million articles
+- somewhere around 150–300 million links between them
+- a few GB of memory once it's all loaded
+
+None of that is precise — it depends on which dump snapshot you use — but it gives you a sense of what kind of machine you'll want for the build step and for hosting.
+
+## A couple of notes
+
+- The `pages`/`linktarget`/`pagelinks` column layouts assumed here match the schema Wikipedia's been using since their ~2021 link-target migration. If you're working from a much older dump, some of the parsing logic may need small tweaks.
+- `graph/` and the raw `.sql.gz` dumps aren't meant to be committed to version control — they're multi-gigabyte generated/source data, not code. Rebuild `graph/` from the steps above, or copy it directly between machines (`rsync` works well) rather than pushing it through git.
