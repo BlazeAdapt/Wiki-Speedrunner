@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wiki-speedrun — trace a path between two articles</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#090909;
+    --panel:#101010;
+    --panel2:#0c0c0c;
+    --line:#292929;
+    --line2:#4a4a4a;
+    --text:#e6e6df;
+    --muted:#85857d;
+    --acid:#baff48;
+    --acid-glow: rgba(186, 255, 72, 0.4);
+    --error:#ff625f;
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+
+  body{
+    min-height:100vh;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Mono',monospace;
+    padding-bottom:5rem;
+    overflow-x:hidden;
+  }
+
+  /* Animated background grid */
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    opacity:.55;
+    background:
+      linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+    background-size:56px 56px;
+    mask-image:linear-gradient(#000,transparent 85%);
+    animation: gridScroll 20s linear infinite;
+  }
+
+  @keyframes gridScroll {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 56px; }
+  }
+
+  header{
+    position:relative;
+    z-index:1;
+    max-width:1100px;
+    margin:auto;
+    padding:4.7rem 1.4rem 3rem;
+    border-bottom:1px solid var(--line);
+  }
+
+  .kicker{
+    font-size:.66rem;
+    letter-spacing:.14em;
+    color:var(--acid);
+    text-transform:uppercase;
+    margin-bottom:1rem;
+    display: inline-block;
+  }
+  .kicker::before{content:"// ";color:var(--muted)}
+
+  h1{
+    font-family:'Rajdhani',sans-serif;
+    font-size:clamp(4rem,10vw,8rem);
+    font-weight:700;
+    letter-spacing:-.055em;
+    line-height:.78;
+    margin:0;
+    text-transform:lowercase;
+    transition: text-shadow 0.3s ease;
+  }
+
+  h1:hover {
+    text-shadow: 0 0 15px rgba(186, 255, 72, 0.3);
+  }
+
+  header p{
+    max-width:39rem;
+    margin:1.7rem 0 0;
+    color:var(--muted);
+    font-size:.78rem;
+    line-height:1.75;
+  }
+
+  .panel-wrap{
+    position:relative;
+    z-index:1;
+    max-width:1100px;
+    margin:auto;
+    padding:2rem 1.4rem 0;
+  }
+
+  .panel{
+    position:relative;
+    width:100%;
+    max-width:780px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    padding:2rem;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .panel:hover {
+    border-color: #383838;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+  }
+
+  .panel::before{
+    content:"PATH_QUERY / 01";
+    position:absolute;
+    right:1rem;
+    top:1rem;
+    color:#3f3f3b;
+    font-size:.58rem;
+    letter-spacing:.08em;
+  }
+
+  .corner{display:none}
+
+  .field{position:relative;margin-bottom:1.45rem}
+
+  .field-label{
+    display:block;
+    font-size:.62rem;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:.55rem;
+  }
+
+  .field input{
+    width:100%;
+    padding:.75rem 0;
+    border:0;
+    border-bottom:1px solid var(--line2);
+    outline:none;
+    background:transparent;
+    color:var(--text);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:.95rem;
+    transition: border-color .25s ease, box-shadow .25s ease;
+  }
+
+  .field input:focus{
+    border-bottom-color:var(--acid);
+    box-shadow: 0 2px 8px -2px var(--acid-glow);
+  }
+  .field input::placeholder{color:#50504a}
+
+  .swap-row{
+    display:flex;
+    align-items:center;
+    gap:.8rem;
+    margin:.15rem 0 1.45rem;
+  }
+
+  .swap-row hr{
+    flex:1;
+    border:0;
+    border-top:1px solid var(--line);
+  }
+
+  .swap-btn{
+    background:transparent;
+    border:1px solid var(--line2);
+    color:var(--muted);
+    border-radius:0;
+    padding:.35rem .65rem;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:.62rem;
+    cursor:pointer;
+    transition: all 0.2s ease;
+  }
+
+  .swap-btn:hover{
+    color:var(--acid);
+    border-color:var(--acid);
+    transform: rotate(180deg);
+  }
+
+  .suggest{
+    position:absolute;
+    left:0;right:0;top:100%;
+    display:none;
+    z-index:20;
+    max-height:220px;
+    overflow:auto;
+    background:#111;
+    border:1px solid var(--line2);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  }
+
+  .suggest.open{display:block}
+
+  .suggest div{
+    padding:.6rem .75rem;
+    color:var(--muted);
+    font-size:.76rem;
+    cursor:pointer;
+    border-bottom:1px solid var(--line);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .suggest div:hover,.suggest div.active{
+    color:var(--acid);
+    background:#171717;
+    padding-left: 1rem;
+  }
+
+  .go-btn{
+    position: relative;
+    overflow: hidden;
+    width:100%;
+    background:var(--acid);
+    color:#080808;
+    border:0;
+    border-radius:0;
+    padding:.95rem 1rem;
+    text-align:left;
+    cursor:pointer;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:.75rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    font-weight: 600;
+    transition: background-color 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
+  }
+
+  .go-btn::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: linear-gradient(60deg, transparent, rgba(255,255,255,0.3), transparent);
+    transform: rotate(30deg) translateY(-100%);
+    transition: transform 0.6s ease;
+  }
+
+  .go-btn:hover::after {
+    transform: rotate(30deg) translateY(100%);
+  }
+
+  .go-btn::before{content:"[ RUN ]  "}
+  .go-btn:hover{
+    background:#d2ff8b;
+    box-shadow: 0 0 15px var(--acid-glow);
+  }
+  .go-btn:active{transform:translateY(1px)}
+  .go-btn:disabled{opacity:.35;cursor:default; box-shadow: none;}
+
+  .status{
+    position:relative;
+    z-index:1;
+    max-width:1100px;
+    min-height:1.5rem;
+    margin:1.25rem auto 0;
+    padding:0 1.4rem;
+    color:var(--muted);
+    font-size:.7rem;
+    transition: color 0.2s ease;
+  }
+
+  .status::before{content:"> ";color:#555}
+  .status.error{color:var(--error)}
+
+  /* Pulse animation for running/loading state */
+  .status.loading::after {
+    content: "█";
+    animation: blink 0.8s infinite;
+    margin-left: 4px;
+    color: var(--acid);
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  .board{
+    position:relative;
+    z-index:1;
+    max-width:1100px;
+    margin:3.8rem auto 0;
+    padding:0 1.4rem;
+  }
+
+  .stat-bar{
+    display:flex;
+    justify-content:flex-start;
+    gap:2rem;
+    flex-wrap:wrap;
+    padding-bottom:.9rem;
+    margin-bottom:1.4rem;
+    border-bottom:1px solid var(--line);
+    color:var(--muted);
+    font-size:.65rem;
+  }
+
+  .stat-bar b{color:var(--text);font-weight:500}
+
+  .path-row{
+    position:relative;
+    display:flex;
+    flex-wrap:wrap;
+    gap:2rem 0;
+    padding:1.3rem 0;
+  }
+
+  .path-svg{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    overflow:visible;
+    pointer-events:none;
+  }
+
+  .path-svg path.trace-base{
+    fill:none;
+    stroke:#303030;
+    stroke-width:1;
+    stroke-dasharray:4 5;
+  }
+
+  .path-svg path.trace-live{
+    fill:none;
+    stroke:var(--acid);
+    stroke-width:2;
+    stroke-linecap:round;
+    filter: drop-shadow(0 0 6px var(--acid-glow));
+  }
+
+  .path-svg circle{
+    fill:var(--acid);
+    filter: drop-shadow(0 0 4px var(--acid));
+    animation: pulseCircle 1.5s infinite alternate ease-in-out;
+  }
+
+  @keyframes pulseCircle {
+    0% { r: 3.5px; opacity: 0.7; }
+    100% { r: 5px; opacity: 1; }
+  }
+
+  .node{
+    position:relative;
+    width:190px;
+    min-height:120px;
+    flex:0 0 auto;
+    margin-right:2rem;
+    padding:1.45rem .9rem .85rem;
+    background:var(--panel);
+    border:1px solid var(--line);
+    opacity:0;
+    transform:translateY(15px) scale(0.96);
+    transition:opacity .35s cubic-bezier(0.16, 1, 0.3, 1), transform .35s cubic-bezier(0.16, 1, 0.3, 1), border-color .2s, box-shadow .2s;
+  }
+
+  .node.show{
+    opacity:1;
+    transform:translateY(0) scale(1);
+    border-color:#4b4b45;
+  }
+
+  .node:hover{
+    border-color:var(--acid);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4), 0 0 10px rgba(186, 255, 72, 0.15);
+  }
+
+  .node .pad{
+    position:absolute;
+    top:-3px;
+    left:12px;
+    width:6px;height:6px;
+    border-radius:0;
+    transform:none;
+    background:var(--acid);
+    box-shadow: 0 0 8px var(--acid);
+    animation: pulsePad 2s infinite ease-in-out;
+  }
+
+  @keyframes pulsePad {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.6; }
+  }
+
+  .node .hopnum{
+    position:absolute;
+    top:.55rem;
+    right:.65rem;
+    color:#555;
+    font-size:.58rem;
+  }
+
+  .node .title{
+    font-family:'IBM Plex Mono',monospace;
+    font-weight:500;
+    font-size:.8rem;
+    line-height:1.5;
+    color:var(--text);
+    word-break:break-word;
+  }
+
+  .node .tag{
+    display:inline-block;
+    margin-top:.7rem;
+    color:var(--acid);
+    font-size:.56rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+  }
+
+  .node a{position:absolute;inset:0;display:block}
+
+  footer{
+    position:relative;
+    z-index:1;
+    max-width:1100px;
+    margin:4rem auto 0;
+    padding:1rem 1.4rem 0;
+    border-top:1px solid var(--line);
+    color:#55554f;
+    font-size:.6rem;
+  }
+
+  @media(max-width:700px){
+    header{padding-top:3.2rem}
+    .panel{padding:1.4rem}
+    .node{width:calc(50% - 1rem);margin-right:1rem}
+  }
+
+  @media(max-width:480px){
+    .node{width:100%;margin-right:0}
+  }
+
+  @media(prefers-reduced-motion:reduce){
+    .node, body::before, .path-svg circle, .node .pad{transition:none; animation:none;}
+  }
+
+</style>
+</head>
+<body>
+
+<header>
+  <div class="kicker">Best way to speedrun wikipedia</div>
+  <h1>wiki&#8209;speedrun</h1>
+  <p>Go from one wikipedia page to another through hyperlinks at super speed!.</p>
+</header>
+
+<div class="panel-wrap">
+  <div class="panel">
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+    <div class="field">
+      <span class="field-label">Start node</span>
+      <input id="start" type="text" placeholder="e.g. Duct tape" autocomplete="off">
+      <div class="suggest" id="suggest-start"></div>
+    </div>
+    <div class="swap-row">
+      <hr>
+      <button class="swap-btn" id="swap" title="Swap start and goal">&#8645; SWAP</button>
+      <hr>
+    </div>
+    <div class="field">
+      <span class="field-label">Destination node</span>
+      <input id="goal" type="text" placeholder="e.g. Genghis Khan" autocomplete="off">
+      <div class="suggest" id="suggest-goal"></div>
+    </div>
+    <button class="go-btn" id="go">Trace route</button>
+  </div>
+</div>
+
+<div class="status" id="status"></div>
+
+<div class="board" id="board" style="display:none">
+  <div class="stat-bar" id="statbar"></div>
+  <div class="path-row" id="pathrow">
+    <svg class="path-svg" id="pathsvg"></svg>
+  </div>
+</div>
+
+<footer>// graph resident in memory / queries served from RAM</footer>
+
+<script>
+const API = "https://supervision-hampton-twiki-singles.trycloudflare.com"; // <-- set this to your backend URL
+
+function debounce(fn, ms){
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+function wireSuggest(inputId, boxId){
+  const input = document.getElementById(inputId);
+  const box = document.getElementById(boxId);
+  let items = [];
+  let activeIdx = -1;
+
+  const render = () => {
+    box.innerHTML = "";
+    items.forEach((t, i) => {
+      const d = document.createElement("div");
+      d.textContent = t;
+      if (i === activeIdx) d.classList.add("active");
+      d.addEventListener("mousedown", (e) => { e.preventDefault(); input.value = t; box.classList.remove("open"); });
+      box.appendChild(d);
+    });
+    box.classList.toggle("open", items.length > 0);
+  };
+
+  const fetchSuggest = debounce(async () => {
+    const q = input.value.trim();
+    if (!q) { items = []; render(); return; }
+    try {
+      const r = await fetch(`${API}/api/suggest?q=${encodeURIComponent(q)}&limit=8`);
+      items = await r.json();
+      activeIdx = -1;
+      render();
+    } catch (e) { /* server not reachable yet — ignore, user is likely mid-typing */ }
+  }, 150);
+
+  input.addEventListener("input", fetchSuggest);
+  input.addEventListener("blur", () => setTimeout(() => box.classList.remove("open"), 100));
+  input.addEventListener("keydown", (e) => {
+    if (!box.classList.contains("open")) return;
+    if (e.key === "ArrowDown") { activeIdx = Math.min(activeIdx + 1, items.length - 1); render(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { activeIdx = Math.max(activeIdx - 1, 0); render(); e.preventDefault(); }
+    else if (e.key === "Enter" && activeIdx >= 0) { input.value = items[activeIdx]; box.classList.remove("open"); e.preventDefault(); }
+    else if (e.key === "Escape") { box.classList.remove("open"); }
+  });
+}
+wireSuggest("start", "suggest-start");
+wireSuggest("goal", "suggest-goal");
+
+document.getElementById("swap").addEventListener("click", () => {
+  const s = document.getElementById("start"), g = document.getElementById("goal");
+  [s.value, g.value] = [g.value, s.value];
+});
+
+const statusEl = document.getElementById("status");
+const board = document.getElementById("board");
+const statbar = document.getElementById("statbar");
+const pathrow = document.getElementById("pathrow");
+const pathsvg = document.getElementById("pathsvg");
+const goBtn = document.getElementById("go");
+
+function wikiUrl(title){
+  return "https://en.wikipedia.org/wiki/" + encodeURIComponent(title.replace(/ /g, "_"));
+}
+
+async function runSearch(){
+  const start = document.getElementById("start").value.trim();
+  const goal = document.getElementById("goal").value.trim();
+  if (!start || !goal){ statusEl.textContent = "Enter both a start and a destination article."; statusEl.className = "status error"; return; }
+
+  goBtn.disabled = true;
+  board.style.display = "none";
+  statusEl.className = "status loading";
+  statusEl.textContent = "> querying the archive...";
+
+  try {
+    const r = await fetch(`${API}/api/search?start=${encodeURIComponent(start)}&goal=${encodeURIComponent(goal)}`);
+    const data = await r.json();
+
+    if (!data.start_found){ statusEl.className = "status error"; statusEl.textContent = `NODE NOT FOUND: "${start}"`; goBtn.disabled = false; return; }
+    if (!data.goal_found){ statusEl.className = "status error"; statusEl.textContent = `NODE NOT FOUND: "${goal}"`; goBtn.disabled = false; return; }
+    if (!data.reachable){ statusEl.className = "status error"; statusEl.textContent = `NO CIRCUIT: no hyperlink path found between those two articles.`; goBtn.disabled = false; return; }
+
+    let note = "";
+    if (data.start_redirected_from) note += `"${data.start_redirected_from}" redirects to "${data.start_canonical}". `;
+    if (data.goal_redirected_from) note += `"${data.goal_redirected_from}" redirects to "${data.goal_canonical}". `;
+    statusEl.className = "status";
+    statusEl.textContent = note;
+
+    statbar.innerHTML = `<span>HOPS <b>${data.hops}</b></span><span>LOOKUP <b>${data.ms.toFixed(2)} ms</b></span>`;
+
+    pathrow.querySelectorAll(".node").forEach(c => c.remove());
+    pathsvg.innerHTML = "";
+    board.style.display = "block";
+
+    data.path.forEach((title, i) => {
+      const node = document.createElement("div");
+      node.className = "node";
+      const tag = i === 0 ? "start" : (i === data.path.length - 1 ? "destination" : `hop ${i}`);
+      node.innerHTML = `
+        <div class="pad"></div>
+        <div class="hopnum">${String(i).padStart(2,"0")}</div>
+        <div class="title">${title.replace(/_/g, " ")}</div>
+        <div class="tag">${tag}</div>
+        <a href="${wikiUrl(title)}" target="_blank" rel="noopener" aria-label="Open ${title} on Wikipedia"></a>
+      `;
+      pathrow.insertBefore(node, pathsvg);
+    });
+
+    const nodes = Array.from(pathrow.querySelectorAll(".node"));
+    nodes.forEach((c, i) => setTimeout(() => c.classList.add("show"), i * 110));
+
+    setTimeout(() => {
+      const rowRect = pathrow.getBoundingClientRect();
+      pathsvg.setAttribute("width", rowRect.width);
+      pathsvg.setAttribute("height", rowRect.height);
+      let d = "";
+      const pts = [];
+      nodes.forEach((c, i) => {
+        const r = c.getBoundingClientRect();
+        const x = r.left - rowRect.left + r.width / 2;
+        const y = r.top - rowRect.top;
+        pts.push([x, y]);
+        d += (i === 0 ? "M" : "L") + x + " " + y + " ";
+      });
+
+      const base = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      base.setAttribute("d", d);
+      base.setAttribute("class", "trace-base");
+      pathsvg.appendChild(base);
+
+      const live = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      live.setAttribute("d", d);
+      live.setAttribute("class", "trace-live");
+      const len = 3000;
+      live.style.strokeDasharray = len;
+      live.style.strokeDashoffset = len;
+      pathsvg.appendChild(live);
+      live.getBoundingClientRect();
+      live.style.transition = `stroke-dashoffset ${Math.min(1.3, nodes.length * 0.16)}s ease`;
+      live.style.strokeDashoffset = 0;
+
+      pts.forEach(([x, y]) => {
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 3.5);
+        pathsvg.appendChild(c);
+      });
+    }, nodes.length * 110 + 80);
+
+  } catch (e) {
+    statusEl.className = "status error";
+    statusEl.textContent = "LINK DOWN: couldn't reach the server.";
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+
+goBtn.addEventListener("click", runSearch);
+[document.getElementById("start"), document.getElementById("goal")].forEach(inp =>
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); })
+);
+</script>
+</body>
+</html>
