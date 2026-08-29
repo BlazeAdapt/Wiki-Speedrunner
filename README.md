@@ -1,4 +1,4 @@
-# wiki-speedrun
+# [Wiki-speedrunner](https://wiki-speedrunner.vercel.app)
 
 Find the shortest chain of Wikipedia hyperlinks between any two articles — built from the raw enwiki dumps, no MySQL required, and fast enough to answer in milliseconds once it's running.
 
